@@ -98,6 +98,11 @@ impl<B: Brush> TreeStyleBuilder<B> {
             WhiteSpaceCollapse::Collapse => {
                 let mut span_text = uncommitted_text.as_str();
 
+                // Trim only ASCII whitespace, matching the mid-span
+                // collapse below: `str::trim_*()` are Unicode-aware and
+                // would also strip U+00A0 (no-break space), which is not
+                // a collapsible space — `<td>&nbsp;</td>` spacer cells
+                // must keep their line box.
                 if self.is_span_first
                     || (self.last_item_kind == ItemKind::TextRun
                         && self
@@ -106,10 +111,10 @@ impl<B: Brush> TreeStyleBuilder<B> {
                             .last()
                             .is_some_and(|c| c.is_ascii_whitespace()))
                 {
-                    span_text = span_text.trim_start();
+                    span_text = span_text.trim_start_matches(|c: char| c.is_ascii_whitespace());
                 }
                 if is_span_last {
-                    span_text = span_text.trim_end();
+                    span_text = span_text.trim_end_matches(|c: char| c.is_ascii_whitespace());
                 }
 
                 // Collapse spaces
