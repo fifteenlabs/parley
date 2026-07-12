@@ -111,10 +111,10 @@ impl<B: Brush> TreeStyleBuilder<B> {
                             .last()
                             .is_some_and(|c| c.is_ascii_whitespace()))
                 {
-                    span_text = span_text.trim_start_matches(|c: char| c.is_ascii_whitespace());
+                    span_text = span_text.trim_ascii_start();
                 }
                 if is_span_last {
-                    span_text = span_text.trim_end_matches(|c: char| c.is_ascii_whitespace());
+                    span_text = span_text.trim_ascii_end();
                 }
 
                 // Collapse spaces
