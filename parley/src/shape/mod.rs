@@ -271,6 +271,13 @@ struct FontSelector<'a, 'b, B: Brush> {
     /// The font to use if [`Self::query`] doesn't return any font.
     last_resort_font: LastResortFont,
 
+    /// Characters of the current segment no script-extension fallback has a glyph for, so later
+    /// clusters skip a retry that would rebuild the query's fallback families for nothing.
+    unfound: SmallVec<[char; 4]>,
+
+    /// The font chosen for the current cluster.
+    selected: Option<QueryFont>,
+
     analysis_data_sources: &'a AnalysisDataSources,
 }
 
@@ -296,6 +303,8 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
             attrs,
             query_yields_font: None,
             last_resort_font: LastResortFont::Unresolved,
+            unfound: SmallVec::new(),
+            selected: None,
 
             analysis_data_sources,
         }
@@ -312,13 +321,14 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
             segment.script,
             options.language.as_ref(),
         ));
+        self.unfound.clear();
         self.query_yields_font = None;
     }
 
     fn select_font(
         &mut self,
-        _segment: &parley_engine::itemize::Segment,
-        _options: &ShapeOptions<'_>,
+        segment: &parley_engine::itemize::Segment,
+        options: &ShapeOptions<'_>,
         cluster: &mut CharCluster,
     ) -> Option<FontInstanceRef<'_>> {
         let style_index = cluster.style_index();
@@ -397,49 +407,105 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
             };
         }
 
-        let mut selected_font = None;
-        let mut best_coverage = Coverage::NONE;
+        let (mut selected, mut best_coverage) =
+            best_covering_font(self.query, cluster, self.analysis_data_sources);
 
-        self.query.matches_with(|font| {
-            let Some(charmap) = font.charmap() else {
-                return fontique::QueryStatus::Continue;
-            };
-
-            let coverage = cluster.calculate_coverage(
-                |ch| {
-                    charmap
-                        .map(ch)
-                        .map(|g| {
-                            // Any non-zero value indicates the existence of a glyph.
-                            g != 0
-                        })
-                        .unwrap_or_default()
-                },
-                self.analysis_data_sources,
-            );
-            if coverage > best_coverage {
-                selected_font = Some(font);
-                best_coverage = coverage;
-
-                if coverage.is_complete() {
-                    fontique::QueryStatus::Stop
-                } else {
-                    fontique::QueryStatus::Continue
+        // Characters shared between scripts take the script of the text around them, so the
+        // segment's fallbacks may have nothing for them. Look among the fallbacks of every script
+        // the cluster's characters are actually used with before settling for a missing glyph.
+        let retry = !best_coverage.is_complete()
+            && cluster
+                .chars()
+                .iter()
+                .any(|ch| !self.unfound.contains(&ch.ch));
+        if retry {
+            let language = options.language.as_ref();
+            let mut scripts: SmallVec<[fontique::Script; 4]> = SmallVec::new();
+            for ch in cluster.chars() {
+                for script in
+                    parley_engine::itemize::script_extensions(ch.ch, self.analysis_data_sources)
+                {
+                    if script != segment.script && !scripts.contains(&script) {
+                        scripts.push(script);
+                    }
                 }
-            } else {
-                if selected_font.is_none() {
-                    selected_font = Some(font);
-                }
-                fontique::QueryStatus::Continue
             }
-        });
+            for script in scripts {
+                self.query
+                    .set_fallbacks(fontique::FallbackKey::new(script, language));
+                let (font, coverage) =
+                    best_covering_font(self.query, cluster, self.analysis_data_sources);
+                if coverage > best_coverage {
+                    selected = font;
+                    best_coverage = coverage;
+                }
+                if best_coverage.is_complete() {
+                    break;
+                }
+            }
+            self.query
+                .set_fallbacks(fontique::FallbackKey::new(segment.script, language));
+            if !best_coverage.is_complete() {
+                self.unfound.extend(cluster.chars().iter().map(|ch| ch.ch));
+            }
+        }
 
-        selected_font.map(|font| FontInstanceRef {
+        self.selected = selected;
+        self.selected.as_ref().map(|font| FontInstanceRef {
             data: &font.blob,
             index: font.index,
             synthesis: &font.synthesis,
         })
     }
+}
+
+/// The font of `query` that covers the most of `cluster`, with that coverage.
+///
+/// When no font covers any of it, the first font with a charmap is returned, so the cluster is
+/// still shaped with a font from the query.
+fn best_covering_font(
+    query: &mut Query<'_>,
+    cluster: &mut CharCluster,
+    analysis_data_sources: &AnalysisDataSources,
+) -> (Option<QueryFont>, Coverage) {
+    let mut selected_font: Option<QueryFont> = None;
+    let mut best_coverage = Coverage::NONE;
+
+    query.matches_with(|font| {
+        let Some(charmap) = font.charmap() else {
+            return fontique::QueryStatus::Continue;
+        };
+
+        let coverage = cluster.calculate_coverage(
+            |ch| {
+                charmap
+                    .map(ch)
+                    .map(|g| {
+                        // Any non-zero value indicates the existence of a glyph.
+                        g != 0
+                    })
+                    .unwrap_or_default()
+            },
+            analysis_data_sources,
+        );
+        if coverage > best_coverage {
+            selected_font = Some(font.clone());
+            best_coverage = coverage;
+
+            if coverage.is_complete() {
+                fontique::QueryStatus::Stop
+            } else {
+                fontique::QueryStatus::Continue
+            }
+        } else {
+            if selected_font.is_none() {
+                selected_font = Some(font.clone());
+            }
+            fontique::QueryStatus::Continue
+        }
+    });
+
+    (selected_font, best_coverage)
 }
 
 /// Just query for any generic family's font from the font collection.

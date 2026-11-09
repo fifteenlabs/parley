@@ -15,6 +15,7 @@ use icu_normalizer::properties::{
     CanonicalDecompositionBorrowed,
 };
 use icu_properties::props::{BidiMirroringGlyph, GeneralCategory, GraphemeClusterBreak, Script};
+use icu_properties::script::{ScriptWithExtensions, ScriptWithExtensionsBorrowed};
 use icu_properties::{
     CodePointMapData, CodePointMapDataBorrowed, PropertyNamesShort, PropertyNamesShortBorrowed,
 };
@@ -137,6 +138,11 @@ impl AnalysisDataSources {
     #[inline(always)]
     pub fn decomposing_normalizer(&self) -> CanonicalDecompositionBorrowed<'_> {
         const { CanonicalDecomposition::new() }
+    }
+
+    #[inline(always)]
+    pub fn script_with_extensions(&self) -> ScriptWithExtensionsBorrowed<'static> {
+        ScriptWithExtensions::new()
     }
 
     #[inline(always)]
