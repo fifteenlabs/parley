@@ -236,6 +236,20 @@ fn real_script(script: IcuScript) -> bool {
     script != IcuScript::Common && script != IcuScript::Unknown && script != IcuScript::Inherited
 }
 
+/// The scripts a character is used with, per its Unicode `Script_Extensions` property.
+///
+/// A character shared between scripts, such as the katakana middle dot (U+30FB), takes the script
+/// of the text around it during itemization, so a run of Latin text asks only Latin fallbacks for
+/// it. This yields every script the character is actually used with, so a caller can look among
+/// those scripts' fallbacks when the run's own have no glyph for it.
+pub fn script_extensions(ch: char) -> impl Iterator<Item = Script> {
+    icu_properties::script::ScriptWithExtensions::new()
+        .get_script_extensions_val(ch)
+        .iter()
+        .filter(|script| real_script(*script))
+        .map(icu_script_to_parlance_script)
+}
+
 /// Convert an ICU script into a [`Script`].
 #[inline]
 fn icu_script_to_parlance_script(script: IcuScript) -> Script {
