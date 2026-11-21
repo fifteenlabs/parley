@@ -123,8 +123,8 @@ struct LineBoxMetrics {
     line_relative_top_height: f32,
     /// Height of the tallest `vertical-align: bottom` inline box.
     line_relative_bottom_height: f32,
-    /// Whether the line has any text or non-empty in-flow inline box. A line with only empty
-    /// inline boxes is treated as having zero height (an "invisible" line box).
+    /// Whether the line has any text or in-flow inline box. A line with only out-of-flow boxes is
+    /// treated as having zero height (an "invisible" line box).
     has_content: bool,
     /// The layout item and style of the last text atom added, whose boxes are already on the line.
     last_text: (usize, u16),
@@ -473,9 +473,10 @@ impl LineBoxMetrics {
     ) {
         // Inline box extents are exact box sizes supplied by the caller, not font metrics;
         // rounding them would change the space the box reserves relative to its height.
-        // Negative margins can make the reserved space negative; the box is still content.
-        // Out-of-flow boxes have infinitely negative extents and are not.
-        if (ascent != 0. || descent != 0.) && ascent.is_finite() && descent.is_finite() {
+        // An in-flow box is an atomic inline, which is content even when it is empty or when
+        // negative margins make its reserved space negative (CSS 2 § 9.4.2). Out-of-flow boxes
+        // have infinitely negative extents and are not.
+        if ascent.is_finite() && descent.is_finite() {
             self.has_content = true;
         }
         let inline_box = BoxMetrics {
@@ -491,9 +492,7 @@ impl LineBoxMetrics {
     /// box's height.
     fn add_line_relative_inline_box(&mut self, align: VerticalAlign, height: f32, quantize: bool) {
         let height = if quantize { height.round() } else { height };
-        if height > 0. {
-            self.has_content = true;
-        }
+        self.has_content = true;
         let slot = match align.shift {
             BaselineShift::Bottom => &mut self.line_relative_bottom_height,
             _ => &mut self.line_relative_top_height,
@@ -915,7 +914,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
             line_indent,
         );
 
-        // A line containing only empty inline boxes (and no text) is an invisible line box with
+        // A line containing only out-of-flow boxes (and no text) is an invisible line box with
         // zero height; the strut only applies once the line has content. The trailing empty line
         // after a final newline has no items and keeps the strut so the cursor has a position.
         let invisible = !self.state.line.box_metrics.has_content
